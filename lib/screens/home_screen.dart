@@ -18,6 +18,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _allMovies = [];
   bool _isLoading = true;
   String? _errorMessage;
+  bool _isRefreshing = false;
 
   @override
   void initState() {
@@ -26,16 +27,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchMovies() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    if (_isRefreshing || !mounted) return;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+        _isRefreshing = true;
+      });
+    }
     try {
       final userId = FirebaseAuth.instance.currentUser?.uid;
       if (userId != null && !widget.flaskServerFailed) {
         _recommendedMovies = await _movieService.fetchRecommendedMovies(
           userId,
-          genres: [], // Populated by watch history or interactions
+          genres: [],
           cast: [],
         );
         print('Fetched recommended movies: $_recommendedMovies');
@@ -50,13 +55,18 @@ class _HomeScreenState extends State<HomeScreen> {
       print('Fetched all movies: $_allMovies');
     } catch (e) {
       print('Error fetching movies: $e');
-      setState(() {
-        _errorMessage = 'Error fetching movies: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Error fetching movies: $e';
+        });
+      }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isRefreshing = false;
+        });
+      }
     }
   }
 
@@ -65,11 +75,24 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('Home'),
         backgroundColor: Colors.black,
-        elevation: 2,
-        shadowColor: Colors.white.withOpacity(0.1),
+        title: const Text(
+          'WatchM',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            fontSize: 22,
+            letterSpacing: 1.2,
+          ),
+        ),
+        elevation: 6,
+        shadowColor: Colors.white.withOpacity(0.2),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            onPressed: _fetchMovies,
+            tooltip: 'Refresh Movies',
+          ),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () async {
@@ -79,59 +102,87 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pushReplacementNamed(context, '/login');
               } catch (e) {
                 print('Error signing out: $e');
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Error signing out: $e'),
-                    backgroundColor: Colors.redAccent,
-                  ),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Error signing out: $e',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: Colors.black,
+                    ),
+                  );
+                }
               }
             },
+            tooltip: 'Logout',
           ),
         ],
       ),
       body:
           _isLoading
               ? const Center(
-                child: CircularProgressIndicator(color: Colors.deepPurple),
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 3,
+                ),
               )
               : _errorMessage != null
               ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      _errorMessage!,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: Colors.redAccent,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: _fetchMovies,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 40,
-                          vertical: 16,
+                child: Card(
+                  color: Colors.black,
+                  elevation: 8,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  margin: const EdgeInsets.all(16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          color: Colors.white,
+                          size: 40,
                         ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                        const SizedBox(height: 16),
+                        Text(
+                          _errorMessage!,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
-                      ),
-                      child: const Text(
-                        'Retry',
-                        style: TextStyle(fontSize: 18, color: Colors.white),
-                      ),
+                        const SizedBox(height: 20),
+                        ElevatedButton(
+                          onPressed: _fetchMovies,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 40,
+                              vertical: 12,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: const BorderSide(color: Colors.white),
+                            ),
+                          ),
+                          child: const Text(
+                            'Retry',
+                            style: TextStyle(fontSize: 16, color: Colors.white),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               )
               : RefreshIndicator(
-                onRefresh: _fetchMovies,
-                color: Colors.deepPurple,
+                onRefresh: () => Future.value(), // Disable pull-to-refresh
+                color: Colors.white,
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   child: Padding(
@@ -142,34 +193,68 @@ class _HomeScreenState extends State<HomeScreen> {
                         const Text(
                           'Recommended for You',
                           style: TextStyle(
-                            fontSize: 20,
+                            fontSize: 26,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
+                            letterSpacing: 1.5,
+                            shadows: [
+                              Shadow(
+                                color: Colors.white,
+                                offset: Offset(1.0, 1.0),
+                                blurRadius: 2.0,
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 20),
                         widget.flaskServerFailed
                             ? const Center(
-                              child: Text(
-                                'Recommendations unavailable: Flask server not running.',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Colors.white70,
+                              child: Card(
+                                color: Colors.black,
+                                elevation: 4,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.all(
+                                    Radius.circular(12),
+                                  ),
+                                ),
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Text(
+                                    'Recommendations unavailable: Flask server not running.',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
                                 ),
                               ),
                             )
                             : _recommendedMovies.isEmpty
                             ? const Center(
-                              child: Text(
-                                'No recommendations available.',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Colors.white70,
+                              child: Card(
+                                color: Colors.black,
+                                elevation: 4,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.all(
+                                    Radius.circular(12),
+                                  ),
+                                ),
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Text(
+                                    'No recommendations available.',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
                                 ),
                               ),
                             )
                             : SizedBox(
-                              height: 200,
+                              height: 240,
                               child: ListView.builder(
                                 scrollDirection: Axis.horizontal,
                                 itemCount: _recommendedMovies.length,
@@ -181,16 +266,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                         print(
                                           'Invalid TMDB ID for recommended movie: ${movie['title']}, skipping navigation',
                                         );
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              'Cannot load movie details: Missing TMDB ID.',
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Cannot load movie details: Missing TMDB ID.',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              backgroundColor: Colors.black,
                                             ),
-                                            backgroundColor: Colors.redAccent,
-                                          ),
-                                        );
+                                          );
+                                        }
                                         return;
                                       }
                                       print(
@@ -202,57 +292,88 @@ class _HomeScreenState extends State<HomeScreen> {
                                         arguments: movie,
                                       );
                                     },
-                                    child: Container(
-                                      width: 120,
-                                      margin: const EdgeInsets.only(right: 16),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Expanded(
-                                            child: ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              child:
-                                                  movie['poster_path'] !=
-                                                              null &&
-                                                          movie['poster_path']
-                                                              .isNotEmpty
-                                                      ? Image.network(
-                                                        'https://image.tmdb.org/t/p/w200${movie['poster_path']}',
-                                                        fit: BoxFit.cover,
-                                                        errorBuilder:
-                                                            (
-                                                              context,
-                                                              error,
-                                                              stackTrace,
-                                                            ) => const Icon(
-                                                              Icons.error,
-                                                              size: 50,
-                                                              color:
-                                                                  Colors
-                                                                      .white70,
-                                                            ),
-                                                      )
-                                                      : const Icon(
-                                                        Icons.movie,
-                                                        size: 50,
-                                                        color: Colors.white70,
-                                                      ),
-                                            ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: 12),
+                                      child: Card(
+                                        elevation: 6,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            15,
                                           ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            movie['title'] ?? 'Unknown Title',
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
+                                        ),
+                                        color: Colors.black,
+                                        child: Container(
+                                          width: 150,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              ClipRRect(
+                                                borderRadius:
+                                                    const BorderRadius.vertical(
+                                                      top: Radius.circular(15),
+                                                    ),
+                                                child:
+                                                    movie['poster_path'] !=
+                                                                null &&
+                                                            movie['poster_path']
+                                                                .isNotEmpty
+                                                        ? Image.network(
+                                                          'https://image.tmdb.org/t/p/w200${movie['poster_path']}',
+                                                          fit: BoxFit.cover,
+                                                          height: 180,
+                                                          width: 150,
+                                                          errorBuilder:
+                                                              (
+                                                                context,
+                                                                error,
+                                                                stackTrace,
+                                                              ) => Container(
+                                                                height: 180,
+                                                                width: 150,
+                                                                color:
+                                                                    Colors
+                                                                        .black,
+                                                                child: const Icon(
+                                                                  Icons.error,
+                                                                  size: 40,
+                                                                  color:
+                                                                      Colors
+                                                                          .white,
+                                                                ),
+                                                              ),
+                                                        )
+                                                        : Container(
+                                                          height: 180,
+                                                          width: 150,
+                                                          color: Colors.black,
+                                                          child: const Icon(
+                                                            Icons.movie,
+                                                            size: 40,
+                                                            color: Colors.white,
+                                                          ),
+                                                        ),
+                                              ),
+                                              Padding(
+                                                padding: const EdgeInsets.all(
+                                                  8.0,
+                                                ),
+                                                child: Text(
+                                                  movie['title'] ??
+                                                      'Unknown Title',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   );
@@ -263,19 +384,40 @@ class _HomeScreenState extends State<HomeScreen> {
                         const Text(
                           'All Movies',
                           style: TextStyle(
-                            fontSize: 20,
+                            fontSize: 26,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
+                            letterSpacing: 1.5,
+                            shadows: [
+                              Shadow(
+                                color: Colors.white,
+                                offset: Offset(1.0, 1.0),
+                                blurRadius: 2.0,
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 20),
                         _allMovies.isEmpty
                             ? const Center(
-                              child: Text(
-                                'No movies available.',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Colors.white70,
+                              child: Card(
+                                color: Colors.black,
+                                elevation: 4,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.all(
+                                    Radius.circular(12),
+                                  ),
+                                ),
+                                child: Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: Text(
+                                    'No movies available.',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
                                 ),
                               ),
                             )
@@ -298,16 +440,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                       print(
                                         'Invalid TMDB ID for TMDB movie: ${movie['title']}, skipping navigation',
                                       );
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Cannot load movie details: Missing TMDB ID.',
+                                      if (mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Cannot load movie details: Missing TMDB ID.',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                            backgroundColor: Colors.black,
                                           ),
-                                          backgroundColor: Colors.redAccent,
-                                        ),
-                                      );
+                                        );
+                                      }
                                       return;
                                     }
                                     print(
@@ -319,50 +466,68 @@ class _HomeScreenState extends State<HomeScreen> {
                                       arguments: movie,
                                     );
                                   },
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Expanded(
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
+                                  child: Card(
+                                    elevation: 6,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(15),
+                                    ),
+                                    color: Colors.black,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius:
+                                              const BorderRadius.vertical(
+                                                top: Radius.circular(15),
+                                              ),
                                           child:
                                               movie['poster_path'] != null
                                                   ? Image.network(
                                                     'https://image.tmdb.org/t/p/w200${movie['poster_path']}',
                                                     fit: BoxFit.cover,
+                                                    height: 180,
+                                                    width: double.infinity,
                                                     errorBuilder:
                                                         (
                                                           context,
                                                           error,
                                                           stackTrace,
-                                                        ) => const Icon(
-                                                          Icons.error,
-                                                          size: 50,
-                                                          color: Colors.white70,
+                                                        ) => Container(
+                                                          height: 180,
+                                                          color: Colors.black,
+                                                          child: const Icon(
+                                                            Icons.error,
+                                                            size: 40,
+                                                            color: Colors.white,
+                                                          ),
                                                         ),
                                                   )
-                                                  : const Icon(
-                                                    Icons.movie,
-                                                    size: 50,
-                                                    color: Colors.white70,
+                                                  : Container(
+                                                    height: 180,
+                                                    color: Colors.black,
+                                                    child: const Icon(
+                                                      Icons.movie,
+                                                      size: 40,
+                                                      color: Colors.white,
+                                                    ),
                                                   ),
                                         ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        movie['title'] ?? 'Unknown Title',
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold,
+                                        Padding(
+                                          padding: const EdgeInsets.all(8.0),
+                                          child: Text(
+                                            movie['title'] ?? 'Unknown Title',
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
                                         ),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 );
                               },
