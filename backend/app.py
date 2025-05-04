@@ -7,32 +7,42 @@ import numpy as np
 import os
 import time
 import random
+import csv
 
 app = Flask(__name__)
 
 TMDB_API_KEY = 'caa52eead5146df17afc06cfce2168b9'
-MODEL_REFRESH_FILE = 'last_model_refresh.txt'
+DATASET_FILE = 'movies_dataset.csv'
+TARGET_MOVIE_COUNT = 3000
+REQUEST_DELAY = 0.1
 
-# Global variables for the recommendation model
 df = None
 cosine_sim = None
 tfidf = None
-model_loaded = False  # Track if the model has been loaded
+model_loaded = False
 
-def fetch_movies_for_dataset(pages=5):
-    """Fetch movies from TMDB to build the recommendation dataset."""
+def fetch_movies_for_dataset(target_count=TARGET_MOVIE_COUNT):
     movies = []
-    for page in range(1, pages + 1):
+    page = 1
+    movies_fetched = 0
+
+    while movies_fetched < target_count:
         try:
+            print(f"Fetching page {page}...")
             response = requests.get(
                 f'https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&sort_by=popularity.desc&page={page}',
                 timeout=10
             )
             if response.status_code != 200:
                 print(f"Skipping page {page} due to status code: {response.status_code}")
+                page += 1
                 continue
 
             data = response.json().get('results', [])
+            if not data:
+                print(f"No more movies available after page {page}.")
+                break
+
             for movie in data:
                 movie_id = movie['id']
                 details_response = requests.get(
@@ -57,73 +67,86 @@ def fetch_movies_for_dataset(pages=5):
                     'overview': details.get('overview', 'No description available'),
                     'features': ' '.join(movie_genres + movie_cast)
                 })
+                movies_fetched += 1
+
+                if movies_fetched >= target_count:
+                    break
+
+                time.sleep(REQUEST_DELAY)
+
+            page += 1
+            time.sleep(REQUEST_DELAY)
+
         except Exception as e:
             print(f"Error fetching movies from TMDB (page {page}): {e}")
+            page += 1
             continue
+
     print(f"Fetched {len(movies)} movies for dataset.")
     return movies
 
-def build_recommendation_model():
-    """Build or rebuild the recommendation model using TF-IDF and cosine similarity."""
-    movies = fetch_movies_for_dataset(pages=5)
-    if not movies:
-        print("No movies fetched to build the model.")
-        return None, None, None
+def save_dataset_to_csv(movies):
+    try:
+        with open(DATASET_FILE, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['id', 'title', 'poster_path', 'genres', 'cast', 'release_date', 'overview', 'features'])
+            writer.writeheader()
+            for movie in movies:
+                movie_copy = movie.copy()
+                movie_copy['genres'] = ','.join(movie_copy['genres'])
+                movie_copy['cast'] = ','.join(movie_copy['cast'])
+                writer.writerow(movie_copy)
+        print(f"Saved dataset to {DATASET_FILE}.")
+    except Exception as e:
+        print(f"Error saving dataset to {DATASET_FILE}: {e}")
 
+def load_dataset_from_csv():
+    if not os.path.exists(DATASET_FILE):
+        print(f"Dataset file {DATASET_FILE} not found.")
+        return None
+
+    try:
+        movies = []
+        with open(DATASET_FILE, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                row['genres'] = row['genres'].split(',') if row['genres'] else []
+                row['cast'] = row['cast'].split(',') if row['cast'] else []
+                row['id'] = int(row['id'])
+                movies.append(row)
+        print(f"Loaded {len(movies)} movies from {DATASET_FILE}.")
+        return movies
+    except Exception as e:
+        print(f"Error loading dataset from {DATASET_FILE}: {e}")
+        return None
+
+def build_recommendation_model(movies):
     df = pd.DataFrame(movies)
     tfidf = TfidfVectorizer(stop_words='english')
     tfidf_matrix = tfidf.fit_transform(df['features'])
     cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
     return df, cosine_sim, tfidf
 
-def should_refresh_model():
-    """Check if the model should be refreshed (every 24 hours)."""
-    if not os.path.exists(MODEL_REFRESH_FILE):
-        print(f"Model refresh file {MODEL_REFRESH_FILE} not found, creating it.")
-        with open(MODEL_REFRESH_FILE, 'w') as f:
-            f.write(str(time.time()))
-        return True
-
-    try:
-        with open(MODEL_REFRESH_FILE, 'r') as f:
-            last_refresh = float(f.read().strip())
-    except (ValueError, IOError) as e:
-        print(f"Error reading {MODEL_REFRESH_FILE}: {e}, forcing refresh.")
-        return True
-
-    current_time = time.time()
-    time_diff = current_time - last_refresh
-    refresh_needed = time_diff >= 24 * 60 * 60
-    print(f"Time since last refresh: {time_diff/3600:.2f} hours, refresh needed: {refresh_needed}")
-    return refresh_needed
-
-def update_refresh_timestamp():
-    """Update the timestamp of the last model refresh."""
-    try:
-        with open(MODEL_REFRESH_FILE, 'w') as f:
-            f.write(str(time.time()))
-        print(f"Updated refresh timestamp in {MODEL_REFRESH_FILE}.")
-    except IOError as e:
-        print(f"Error updating {MODEL_REFRESH_FILE}: {e}")
-
 def load_or_refresh_model():
-    """Load the existing model or refresh it if needed."""
     global df, cosine_sim, tfidf, model_loaded
-    if model_loaded and not should_refresh_model():
-        print("Model already loaded and no refresh needed.")
-        return
+    movies = load_dataset_from_csv()
+    if movies is None or len(movies) < TARGET_MOVIE_COUNT:
+        print("CSV dataset insufficient or missing, fetching from TMDB...")
+        movies = fetch_movies_for_dataset(target_count=TARGET_MOVIE_COUNT)
+        if not movies:
+            print("No movies fetched to build the model.")
+            return
+        save_dataset_to_csv(movies)
+    else:
+        print(f"Using existing CSV dataset with {len(movies)} movies.")
 
-    print("Loading or refreshing recommendation model...")
-    df, cosine_sim, tfidf = build_recommendation_model()
+    df, cosine_sim, tfidf = build_recommendation_model(movies)
     if df is None or cosine_sim is None or tfidf is None:
         print("Failed to load or refresh recommendation model.")
     else:
         print(f"Recommendation model loaded/refreshed with {len(df)} movies.")
         model_loaded = True
-        update_refresh_timestamp()
 
-def get_recommendations(genres, cast, limit=10):
-    """Generate movie recommendations based on genres and cast."""
+def get_recommendations(history, limit=10):
     global df, cosine_sim, tfidf
     load_or_refresh_model()
 
@@ -132,12 +155,8 @@ def get_recommendations(genres, cast, limit=10):
         return []
 
     try:
-        genres = [g.replace(' ', '_').lower() for g in genres] if genres else []
-        cast = [c.replace(' ', '_').lower() for c in cast] if cast else []
-        print(f"Received genres: {genres}, cast: {cast}")
-
-        if not genres and not cast:
-            print("No genres or cast provided, returning random movies.")
+        if not history:
+            print("No user history provided, returning random movies.")
             if len(df) <= limit:
                 random_movies = df.to_dict('records')
             else:
@@ -151,15 +170,61 @@ def get_recommendations(genres, cast, limit=10):
                     'cast': movie['cast'],
                     'release_date': movie['release_date'],
                     'overview': movie['overview'],
+                    'tmdb_id': int(movie['id'])  # Convert to Python int
                 }
                 for movie in random_movies
             ]
 
-        user_features = ' '.join(genres + cast)
-        print(f"Generating recommendations with features: {user_features}")
+        user_features = []
+        weights = []
+        for entry in history:
+            genres = [g.replace(' ', '_').lower() for g in entry.get('genres', [])]
+            cast = [c.replace(' ', '_').lower() for c in entry.get('cast', [])]
+            if not genres and not cast:
+                print(f"Skipping history entry for {entry.get('title', 'unknown')} due to empty genres and cast.")
+                continue
+            feature_str = ' '.join(genres + cast)
+            user_features.append(feature_str)
 
-        user_tfidf = tfidf.transform([user_features])
-        user_sim_scores = cosine_similarity(user_tfidf, tfidf.transform(df['features'])).flatten()
+            watch_time = entry.get('watch_time', 0)
+            timestamp = entry.get('timestamp', 0)
+            if watch_time > 0:
+                weight = 1 + (watch_time / 60.0)
+            else:
+                days_old = (time.time() * 1000 - timestamp) / (1000 * 60 * 60 * 24)
+                weight = 1 + (1 / (days_old + 1))
+            weights.append(weight)
+
+        if not user_features:
+            print("No valid user history entries, returning random movies.")
+            if len(df) <= limit:
+                random_movies = df.to_dict('records')
+            else:
+                random_indices = random.sample(range(len(df)), limit)
+                random_movies = df.iloc[random_indices].to_dict('records')
+            return [
+                {
+                    'title': movie['title'],
+                    'poster_path': movie['poster_path'],
+                    'genres': movie['genres'],
+                    'cast': movie['cast'],
+                    'release_date': movie['release_date'],
+                    'overview': movie['overview'],
+                    'tmdb_id': int(movie['id'])  # Convert to Python int
+                }
+                for movie in random_movies
+            ]
+
+        print(f"User history features: {user_features}")
+        print(f"Weights: {weights}")
+
+        user_tfidf = tfidf.transform(user_features)
+        weighted_tfidf = np.zeros_like(user_tfidf[0].toarray())
+        total_weight = sum(weights)
+        for i, weight in enumerate(weights):
+            weighted_tfidf += user_tfidf[i].toarray() * (weight / (total_weight + 1e-10))
+
+        user_sim_scores = cosine_similarity(weighted_tfidf, tfidf.transform(df['features'])).flatten()
         movie_indices = user_sim_scores.argsort()[::-1]
 
         recommended_movies = []
@@ -178,20 +243,27 @@ def get_recommendations(genres, cast, limit=10):
                     'cast': movie['cast'],
                     'release_date': movie['release_date'],
                     'overview': movie['overview'],
+                    'tmdb_id': int(movie['id'])  # Convert to Python int
                 })
                 seen_titles.add(movie['title'])
 
         if len(recommended_movies) < limit:
             print("Not enough unique recommendations, fetching more movies...")
-            new_movies = fetch_movies_for_dataset(pages=1)
+            new_movies = fetch_movies_for_dataset(target_count=limit - len(recommended_movies))
             if new_movies:
                 new_df = pd.DataFrame(new_movies)
                 df = pd.concat([df, new_df]).drop_duplicates(subset=['id']).reset_index(drop=True)
+                save_dataset_to_csv(df.to_dict('records'))
                 tfidf_matrix = tfidf.fit_transform(df['features'])
                 cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 
-                user_tfidf = tfidf.transform([user_features])
-                user_sim_scores = cosine_similarity(user_tfidf, tfidf.transform(df['features'])).flatten()
+                user_tfidf = tfidf.transform(user_features)
+                weighted_tfidf = np.zeros_like(user_tfidf[0].toarray())
+                total_weight = sum(weights)
+                for i, weight in enumerate(weights):
+                    weighted_tfidf += user_tfidf[i].toarray() * (weight / (total_weight + 1e-10))
+
+                user_sim_scores = cosine_similarity(weighted_tfidf, tfidf.transform(df['features'])).flatten()
                 movie_indices = user_sim_scores.argsort()[::-1]
 
                 for idx in movie_indices:
@@ -208,6 +280,7 @@ def get_recommendations(genres, cast, limit=10):
                             'cast': movie['cast'],
                             'release_date': movie['release_date'],
                             'overview': movie['overview'],
+                            'tmdb_id': int(movie['id'])  # Convert to Python int
                         })
                         seen_titles.add(movie['title'])
 
@@ -219,21 +292,17 @@ def get_recommendations(genres, cast, limit=10):
 
 @app.route('/recommend', methods=['POST'])
 def recommend():
-    """Endpoint to receive user preferences and return movie recommendations."""
     try:
         data = request.get_json()
-        genres = data.get('genres', [])
-        cast = data.get('cast', [])
+        history = data.get('history', [])
         limit = data.get('limit', 10)
 
-        recommended_movies = get_recommendations(genres, cast, limit)
+        recommended_movies = get_recommendations(history, limit)
         return jsonify(recommended_movies)
     except Exception as e:
         print(f"Error in /recommend endpoint: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Load or refresh the model when the server starts
 if __name__ == '__main__':
     print("Starting Flask server for movie recommendations...")
-    load_or_refresh_model()
     app.run(debug=True, host='0.0.0.0', port=5000)

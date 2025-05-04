@@ -70,6 +70,74 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showUserInfo() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No user logged in.',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.black,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Extract display name from email (before @) and capitalize it
+    final email = user.email ?? 'Not available';
+    String displayName = 'Not available';
+    if (email != 'Not available' && email.contains('@')) {
+      displayName = email.split('@')[0].toUpperCase();
+    }
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: Colors.black,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Colors.white),
+            ),
+            title: const Text(
+              'User Information',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Email: $email',
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Display Name: $displayName',
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Close',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -87,6 +155,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         elevation: 6,
         shadowColor: Colors.white.withOpacity(0.2),
+        leading: IconButton(
+          icon: const Icon(Icons.account_circle, color: Colors.white),
+          onPressed: _showUserInfo,
+          tooltip: 'Show User Info',
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),

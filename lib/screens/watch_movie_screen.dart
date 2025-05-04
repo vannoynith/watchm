@@ -28,7 +28,6 @@ class _WatchMovieScreenState extends State<WatchMovieScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Set to landscape orientation by default
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -138,11 +137,11 @@ class _WatchMovieScreenState extends State<WatchMovieScreen>
   void _startWatching() {
     if (_isDisposed || !mounted) return;
     setState(() {
-      _isWatching = true;
+      _isWatching = _controller!.value.isPlaying;
     });
     Future.doWhile(() async {
       await Future.delayed(const Duration(seconds: 1));
-      if (_isWatching && mounted) {
+      if (_isWatching && mounted && _controller!.value.isPlaying) {
         setState(() {
           _watchTime++;
         });
@@ -174,7 +173,6 @@ class _WatchMovieScreenState extends State<WatchMovieScreen>
 
   Future<void> _toggleFullScreen() async {
     if (_isDisposed || !mounted) return;
-    // Set to portrait orientation to exit full-screen
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -209,15 +207,13 @@ class _WatchMovieScreenState extends State<WatchMovieScreen>
     _controller?.dispose();
     WidgetsBinding.instance.removeObserver(this);
 
-    // Reset orientation to portrait on dispose
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
 
-    // Save watch history asynchronously (hidden)
     final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId != null && _movie != null) {
+    if (userId != null && _movie != null && _watchTime > 0) {
       _firestoreService
           .saveWatchHistory(userId, _movie!, _watchTime)
           .then((_) {
@@ -232,7 +228,7 @@ class _WatchMovieScreenState extends State<WatchMovieScreen>
           });
     } else {
       print(
-        'User not logged in or movie data missing, cannot save watch history.',
+        'User not logged in, movie data missing, or no watch time recorded, cannot save watch history.',
       );
     }
 

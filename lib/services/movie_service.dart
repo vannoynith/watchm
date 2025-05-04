@@ -20,18 +20,20 @@ class MovieService {
           .getWatchHistory(userId);
       List<Map<String, dynamic>> interactions = await _firestoreService
           .getInteractions(userId);
-      List<String> genresList = [];
-      List<String> castList = [];
+      List<Map<String, dynamic>> history = [];
 
       if (watchHistory.isNotEmpty) {
         watchHistory.sort(
           (a, b) => (b['watch_time'] ?? 0).compareTo(a['watch_time'] ?? 0),
         );
         Map<String, dynamic> mostWatched = watchHistory.first;
-        genresList =
-            (mostWatched['genres'] as List<dynamic>?)?.cast<String>() ?? [];
-        castList =
-            (mostWatched['cast'] as List<dynamic>?)?.cast<String>() ?? [];
+        history.add({
+          'genres':
+              (mostWatched['genres'] as List<dynamic>?)?.cast<String>() ?? [],
+          'cast': (mostWatched['cast'] as List<dynamic>?)?.cast<String>() ?? [],
+          'watch_time': mostWatched['watch_time'] ?? 0,
+          'title': mostWatched['title'] ?? 'Unknown',
+        });
         print(
           'Using watch history for recommendations: ${mostWatched['title']} (Watch time: ${mostWatched['watch_time']} seconds)',
         );
@@ -42,10 +44,17 @@ class MovieService {
           return bTimestamp.compareTo(aTimestamp);
         });
         Map<String, dynamic> lastInteracted = interactions.first;
-        genresList =
-            (lastInteracted['genres'] as List<dynamic>?)?.cast<String>() ?? [];
-        castList =
-            (lastInteracted['cast'] as List<dynamic>?)?.cast<String>() ?? [];
+        history.add({
+          'genres':
+              (lastInteracted['genres'] as List<dynamic>?)?.cast<String>() ??
+              [],
+          'cast':
+              (lastInteracted['cast'] as List<dynamic>?)?.cast<String>() ?? [],
+          'timestamp':
+              lastInteracted['timestamp']?.toDate()?.millisecondsSinceEpoch ??
+              0,
+          'title': lastInteracted['title'] ?? 'Unknown',
+        });
         print(
           'Using interactions for recommendations: ${lastInteracted['title']}',
         );
@@ -55,14 +64,19 @@ class MovieService {
         );
       }
 
+      if (history.isNotEmpty &&
+          history.first['genres'].isEmpty &&
+          history.first['cast'].isEmpty) {
+        print(
+          'No valid genres or cast in user history, requesting random movies.',
+        );
+        history.clear();
+      }
+
       final response = await http.post(
         Uri.parse('$_baseUrl/recommend'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'genres': genresList,
-          'cast': castList,
-          'limit': limit,
-        }),
+        body: jsonEncode({'history': history, 'limit': limit}),
       );
 
       if (response.statusCode == 200) {
@@ -72,10 +86,9 @@ class MovieService {
         );
         List<Map<String, dynamic>> movies =
             recommendations.cast<Map<String, dynamic>>();
-        // Map or fetch TMDB ID for each recommendation
         for (var movie in movies) {
           if (movie['tmdb_id'] != null) {
-            movie['id'] = movie['tmdb_id']; // Map tmdb_id to id for consistency
+            movie['id'] = movie['tmdb_id'];
           } else {
             print(
               'Warning: Movie ${movie['title']} has no tmdb_id, attempting to fetch TMDB ID',
@@ -86,17 +99,15 @@ class MovieService {
               movie['tmdb_id'] = tmdbMovie['id'];
             } else {
               print('Could not find TMDB ID for movie: ${movie['title']}');
-              movie['id'] = null; // Set to null if TMDB ID can't be found
+              movie['id'] = null;
             }
           }
-          // Ensure other fields are present
           movie['poster_path'] = movie['poster_path'] ?? '';
           movie['release_date'] = movie['release_date'] ?? '';
           movie['genres'] = movie['genres'] ?? [];
           movie['cast'] = movie['cast'] ?? [];
           movie['overview'] = movie['overview'] ?? '';
         }
-        // Filter out movies without a valid TMDB ID
         movies = movies.where((movie) => movie['id'] != null).toList();
         print('Processed recommended movies: $movies');
         return movies;
@@ -220,7 +231,6 @@ class MovieService {
         print('TMDB API response for movie $movieId: $data');
         final videos = data['results'] as List<dynamic>;
         print('Available videos for movie $movieId: $videos');
-        // First try to find a "Trailer", then fall back to "Teaser"
         final youtubeVideo = videos.firstWhere(
           (video) =>
               video['site'] == 'YouTube' &&
